@@ -21,7 +21,7 @@ from adam_atan2_pytorch import AdamAtan2 as AdamATan2
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path
 from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
-
+from device_utils import current_device
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
@@ -121,7 +121,7 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     model_cls = load_model_class(config.arch.name)
     loss_head_cls = load_model_class(config.arch.loss.name)
 
-    with torch.device("mps" if torch.backends.mps.is_available() else "cpu"):
+    with torch.device(current_device):
         model: nn.Module = model_cls(model_cfg)
         model = loss_head_cls(model, **config.arch.loss.__pydantic_extra__)  # type: ignore
         if "DISABLE_COMPILE" not in os.environ and not torch.backends.mps.is_available():
@@ -211,11 +211,11 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         return
 
     # To device
-    batch = {k: v.to("mps" if torch.backends.mps.is_available() else "cpu") for k, v in batch.items()}
+    batch = {k: v.to(current_device) for k, v in batch.items()}
 
     # Init carry if it is None
     if train_state.carry is None:
-        with torch.device("mps" if torch.backends.mps.is_available() else "cpu"):
+        with torch.device(current_device):
             train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
 
     # Forward
@@ -275,8 +275,8 @@ def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch
         carry = None
         for set_name, batch, global_batch_size in eval_loader:
             # To device
-            batch = {k: v.to("mps" if torch.backends.mps.is_available() else "cpu") for k, v in batch.items()}
-            with torch.device("mps" if torch.backends.mps.is_available() else "cpu"):
+            batch = {k: v.to(current_device) for k, v in batch.items()}
+            with torch.device(current_device):
                 carry = train_state.model.initial_carry(batch)  # type: ignore
 
             # Forward
@@ -299,7 +299,7 @@ def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch
             
             if metric_values is None:
                 metric_keys = list(sorted(metrics.keys()))  # Sort keys to guarantee all processes use the same order.
-                metric_values = torch.zeros((len(set_ids), len(metrics.values())), dtype=torch.float32, device="mps")
+                metric_values = torch.zeros((len(set_ids), len(metrics.values())), dtype=torch.float32, device=current_device)
                 
             metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
             metric_global_batch_size[set_id] += global_batch_size
