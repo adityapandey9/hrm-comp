@@ -22,7 +22,7 @@ def log_stablemax(x, dim=-1):
 
 
 def stablemax_cross_entropy(logits, labels, ignore_index: int = -100):
-    logprobs = log_stablemax(logits.to(torch.float32), dim=-1)
+    logprobs = log_stablemax(logits.to(torch.bfloat16), dim=-1)
 
     valid_mask = labels != ignore_index
     transformed_labels = torch.where(valid_mask, labels, 0)
@@ -34,7 +34,7 @@ def stablemax_cross_entropy(logits, labels, ignore_index: int = -100):
 def softmax_cross_entropy(logits, labels, ignore_index: int = -100):
     # Cast logits to f32
     # Flatten logits
-    return F.cross_entropy(logits.to(torch.float32).view(-1, logits.shape[-1]), labels.to(torch.long).view(-1), ignore_index=ignore_index, reduction="none").view(labels.shape)
+    return F.cross_entropy(logits.to(torch.bfloat16).view(-1, logits.shape[-1]), labels.to(torch.long).view(-1), ignore_index=ignore_index, reduction="none").view(labels.shape)
 
 
 class ACTLossHead(nn.Module):
@@ -71,7 +71,7 @@ class ACTLossHead(nn.Module):
             metrics = {
                 "count": valid_metrics.sum(),
                 
-                "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), 0).sum(),
+                "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.bfloat16) / loss_divisor).sum(-1), 0).sum(),
                 "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
 
                 "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)).sum(),
