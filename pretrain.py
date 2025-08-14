@@ -317,7 +317,7 @@ def evaluate(config: PretrainConfig, train_state: TrainState, eval_loader: torch
                 dist.reduce(metric_values, dst=0)
             
             if rank == 0:
-                reduced_metrics = metric_values.cpu().numpy()
+                reduced_metrics = metric_values.float().cpu().numpy()
                 reduced_metrics = {set_name: {metric_name: reduced_metrics[set_id, metric_id] for metric_id, metric_name in enumerate(metric_keys)}
                                    for set_id, set_name in enumerate(set_ids)}
                 

@@ -25,5 +25,5 @@ print(f"module_path={module_path}, class_name={class_name}")
 # elif class_name == 'rwkv':
 from .rwkv_attn import RWKVAttention as Attention
 # else:
-    # from pytorch_or_flash_basic_attn import Attention
+# from .pytorch_or_flash_basic_attn import Attention
 
