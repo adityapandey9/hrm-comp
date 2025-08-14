@@ -31,6 +31,8 @@ pip uninstall -y torch torchvision torchaudio
 if check_cuda; then
     echo "Installing PyTorch with CUDA support..."
     pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu128
+    wget https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.2/flash_attn-2.8.2+cu12torch2.7cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+    pip install flash_attn-2.8.2+cu12torch2.7cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
 else
     echo "Installing CPU-only PyTorch..."
     pip install --pre torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --extra-index-url https://download.pytorch.org/whl/nightly/cpu
