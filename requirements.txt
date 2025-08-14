@@ -1,5 +1,9 @@
-torch
-adam-atan2
+packaging
+ninja
+wheel
+setuptools
+setuptools-scm
+adam-atan2-pytorch
 einops
 tqdm
 coolname

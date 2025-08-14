@@ -24,4 +24,6 @@ pip install --upgrade pip
 echo "Installing dependencies from requirements.txt..."
 pip install -r requirements.txt
 
+./init.sh
+
 echo "✅ Setup Complete. Virtualenv is ready."

@@ -1,4 +1,5 @@
 name: hrm.hrm_act_v1@HierarchicalReasoningModel_ACTV1
+attn: attention.default # it would be default, rwkv, linear
 loss:
   name: losses@ACTLossHead
   loss_type: stablemax_cross_entropy
