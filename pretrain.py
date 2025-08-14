@@ -251,7 +251,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             dist.reduce(metric_values, dst=0)
 
         if rank == 0:
-            metric_values = metric_values.cpu().numpy()
+            metric_values = metric_values.float().cpu().numpy()
             reduced_metrics = {k: metric_values[i] for i, k in enumerate(metric_keys)}
             
             # Postprocess
