@@ -54,7 +54,7 @@ class HierarchicalReasoningModel_ACTV1Config(BaseModel):
     halt_max_steps: int
     halt_exploration_prob: float
 
-    forward_dtype: str = "bfloat16"
+    forward_dtype: str = "float32"
 
 
 class HierarchicalReasoningModel_ACTV1Block(nn.Module):
@@ -208,7 +208,7 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
         output = self.lm_head(z_H)[:, self.puzzle_emb_len:]
 
         # Q head
-        q_logits = self.q_head(z_H[:, 0]).to(torch.bfloat16)
+        q_logits = self.q_head(z_H[:, 0]).to(torch.float32)
         
         return new_carry, output, (q_logits[..., 0], q_logits[..., 1])
 

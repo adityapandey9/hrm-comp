@@ -76,8 +76,8 @@ class RotaryEmbedding(nn.Module):
         super().__init__()
 
         # RoPE
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.bfloat16, device=device) / dim))
-        t = torch.arange(max_position_embeddings, dtype=torch.bfloat16, device=device)
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim))
+        t = torch.arange(max_position_embeddings, dtype=torch.float32, device=device)
         freqs = torch.outer(t, inv_freq)
 
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
@@ -104,7 +104,7 @@ class SwiGLU(nn.Module):
 
 def rms_norm(hidden_states: torch.Tensor, variance_epsilon: float) -> torch.Tensor:
     input_dtype = hidden_states.dtype
-    hidden_states = hidden_states.to(torch.bfloat16)
+    hidden_states = hidden_states.to(torch.float32)
 
     variance = hidden_states.square().mean(-1, keepdim=True)
     hidden_states = hidden_states * torch.rsqrt(variance + variance_epsilon)
