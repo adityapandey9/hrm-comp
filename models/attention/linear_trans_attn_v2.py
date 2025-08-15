@@ -32,7 +32,6 @@ def get_best_device(verbose=True):
 
 current_device = get_best_device(verbose=True)
 
-
 def gaussian_orthogonal_random_matrix(nb_rows: int, nb_columns: int, scaling: float = 0, device=None, dtype=None):
     """Create a random matrix with orthogonal rows/columns and Gaussian entries."""
     
@@ -111,27 +110,32 @@ def relu_kernel_transformation(data: torch.Tensor,
                              is_query: bool,
                              normalize_data: bool = True,
                              eps: float = 0.0001):
-    """Apply ReLU kernel transformation for Performer attention."""
+    """Apply ReLU kernel transformation for Performer attention - optimized version."""
     # data: [batch_size, seq_len, num_heads, head_dim]
     # projection_matrix: [nb_features, head_dim]
     
     batch_size, seq_len, num_heads, head_dim = data.shape
     
     # Ensure projection matrix is on the same device as data
-    projection_matrix = projection_matrix.to(data.device, dtype=data.dtype)
+    if projection_matrix.device != data.device:
+        projection_matrix = projection_matrix.to(data.device, dtype=data.dtype)
     
     if normalize_data:
-        # Normalize along head dimension
-        data_normalizer = 1.0 / (torch.sqrt(torch.tensor(head_dim, dtype=data.dtype, device=data.device)) + eps)
+        # Pre-compute normalization factor
+        data_normalizer = (head_dim ** -0.5) + eps
     else:
         data_normalizer = 1.0
     
-    # Reshape for matrix multiplication: [batch_size * seq_len * num_heads, head_dim]
-    data_flat = data.reshape(-1, head_dim)
+    # More efficient reshaping and computation
+    # Reshape: [batch_size * seq_len, num_heads, head_dim]
+    data_reshaped = data.view(batch_size * seq_len, num_heads, head_dim)
     
-    # Project: [batch_size * seq_len * num_heads, nb_features]
-    ratio = 1.0 / math.sqrt(projection_matrix.shape[0])
-    projected_data = ratio * torch.matmul(data_flat, projection_matrix.t()) * data_normalizer
+    # Batch matrix multiplication: [batch_size * seq_len, num_heads, nb_features]
+    ratio = (projection_matrix.shape[0] ** -0.5) * data_normalizer
+    projected_data = torch.bmm(
+        data_reshaped, 
+        projection_matrix.t().unsqueeze(0).expand(batch_size * seq_len, -1, -1)
+    ) * ratio
     
     # Apply ReLU kernel
     transformed_data = F.relu(projected_data)
@@ -141,56 +145,71 @@ def relu_kernel_transformation(data: torch.Tensor,
         transformed_data = transformed_data + eps
     
     # Reshape back: [batch_size, seq_len, num_heads, nb_features]
-    return transformed_data.reshape(batch_size, seq_len, num_heads, -1)
+    return transformed_data.view(batch_size, seq_len, num_heads, -1)
 
 def causal_linear_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
-    """Compute causal linear attention."""
+    """Compute causal linear attention - optimized version."""
     # q, k: [batch_size, seq_len, num_heads, nb_features]
     # v: [batch_size, seq_len, num_heads, head_dim]
     
-    batch_size, seq_len, num_heads, _ = q.shape
+    batch_size, seq_len, num_heads, nb_features = q.shape
     head_dim = v.shape[-1]
     
-    # Initialize running state
-    running_kv = torch.zeros(batch_size, num_heads, k.shape[-1], head_dim, 
-                           device=q.device, dtype=q.dtype)
-    running_z = torch.zeros(batch_size, num_heads, k.shape[-1], 
-                          device=q.device, dtype=q.dtype)
+    # Transpose for efficient computation
+    q = q.transpose(1, 2)  # [batch_size, num_heads, seq_len, nb_features]
+    k = k.transpose(1, 2)  # [batch_size, num_heads, seq_len, nb_features]
+    v = v.transpose(1, 2)  # [batch_size, num_heads, seq_len, head_dim]
+    
+    # Use more efficient cumulative operations
+    kv = torch.zeros(batch_size, num_heads, nb_features, head_dim, 
+                    device=q.device, dtype=q.dtype)
+    z = torch.zeros(batch_size, num_heads, nb_features, 
+                   device=q.device, dtype=q.dtype)
     
     outputs = []
     
     for i in range(seq_len):
-        # Update running state with current step
-        running_kv = running_kv + k[:, i:i+1].transpose(-2, -1) @ v[:, i:i+1]
-        running_z = running_z + k[:, i:i+1].sum(dim=-1)
+        # Update cumulative state
+        kv = kv + torch.matmul(k[:, :, i:i+1].transpose(-2, -1), v[:, :, i:i+1])
+        z = z + k[:, :, i].sum(dim=-1, keepdim=True)
         
         # Compute output for current step
-        result = q[:, i:i+1] @ running_kv
-        result = result / (q[:, i:i+1] @ running_z.unsqueeze(-1) + 1e-6)
+        result = torch.matmul(q[:, :, i:i+1], kv)
+        result = result / (torch.matmul(q[:, :, i:i+1], z.unsqueeze(-1)) + 1e-6)
         outputs.append(result)
     
-    return torch.cat(outputs, dim=1)
+    output = torch.cat(outputs, dim=2)
+    return output.transpose(1, 2)  # Back to [batch_size, seq_len, num_heads, head_dim]
 
 def linear_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: bool = False):
-    """Compute linear attention."""
+    """Compute linear attention - optimized version."""
     if causal:
         return causal_linear_attention(q, k, v)
     else:
-        # Non-causal case: standard linear attention
+        # Non-causal case: optimized linear attention
         # q, k: [batch_size, seq_len, num_heads, nb_features] 
         # v: [batch_size, seq_len, num_heads, head_dim]
         
+        batch_size, seq_len, num_heads, nb_features = q.shape
+        head_dim = v.shape[-1]
+        
+        # Transpose for efficient computation: [batch_size, num_heads, seq_len, features/head_dim]
+        q = q.transpose(1, 2)  # [batch_size, num_heads, seq_len, nb_features]
+        k = k.transpose(1, 2)  # [batch_size, num_heads, seq_len, nb_features]
+        v = v.transpose(1, 2)  # [batch_size, num_heads, seq_len, head_dim]
+        
         # Compute attention weights: [batch_size, num_heads, nb_features, head_dim]
-        kv = torch.einsum('bsnf,bsnh->bnfh', k, v)
+        kv = torch.matmul(k.transpose(-2, -1), v)  # More efficient than einsum
         
         # Compute normalization: [batch_size, num_heads, nb_features]
-        z = torch.einsum('bsnf->bnf', k)
+        z = k.sum(dim=-2)  # More efficient than einsum
         
-        # Compute output: [batch_size, seq_len, num_heads, head_dim]
-        result = torch.einsum('bsnf,bnfh->bsnh', q, kv)
-        result = result / (torch.einsum('bsnf,bnf->bsn', q, z).unsqueeze(-1) + 1e-6)
+        # Compute output: [batch_size, num_heads, seq_len, head_dim]
+        result = torch.matmul(q, kv)
+        result = result / (torch.matmul(q, z.unsqueeze(-1)) + 1e-6)
         
-        return result
+        # Transpose back: [batch_size, seq_len, num_heads, head_dim]
+        return result.transpose(1, 2)
 
 class PerformerLinearAttention(nn.Module):
     def __init__(self, hidden_size, head_dim, num_heads, num_key_value_heads, causal=False, 
@@ -205,8 +224,12 @@ class PerformerLinearAttention(nn.Module):
         self.causal = causal
         self.normalize_data = normalize_data
         
-        # Number of random features (default to head_dim if not specified)
-        self.nb_features = nb_features or head_dim
+        # Reduce number of random features for better performance on MPS
+        # Use fewer features than head_dim to speed up computation
+        if current_device.type == 'mps':
+            self.nb_features = nb_features or max(head_dim // 2, 32)  # Use half features on MPS
+        else:
+            self.nb_features = nb_features or head_dim
         self.feature_type = feature_type
 
         self.qkv_proj = CastedLinear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
@@ -229,11 +252,11 @@ class PerformerLinearAttention(nn.Module):
         # hidden_states: [bs, seq_len, hidden_size]
         qkv = self.qkv_proj(hidden_states)
 
-        # Split head
-        qkv = qkv.reshape(batch_size, seq_len, self.num_heads + 2 * self.num_key_value_heads, self.head_dim)
-        query = qkv[:, :, :self.num_heads]
-        key = qkv[:, :, self.num_heads: self.num_heads + self.num_key_value_heads]
-        value = qkv[:, :, self.num_heads + self.num_key_value_heads:]
+        # Split head - use view for better performance when possible
+        qkv = qkv.view(batch_size, seq_len, self.num_heads + 2 * self.num_key_value_heads, self.head_dim)
+        query = qkv[:, :, :self.num_heads].contiguous()
+        key = qkv[:, :, self.num_heads: self.num_heads + self.num_key_value_heads].contiguous()
+        value = qkv[:, :, self.num_heads + self.num_key_value_heads:].contiguous()
 
         # RoPE (same as original)
         if cos_sin is not None:
@@ -259,16 +282,5 @@ class PerformerLinearAttention(nn.Module):
 
         # attn_output: [batch_size, seq_len, num_heads, head_dim]
         # Use contiguous() to ensure tensor is contiguous before reshape
-        attn_output = attn_output.contiguous().reshape(batch_size, seq_len, self.output_size)
+        attn_output = attn_output.contiguous().view(batch_size, seq_len, self.output_size)
         return self.o_proj(attn_output)
-
-
-
-
-
-
-
-
-
-
-

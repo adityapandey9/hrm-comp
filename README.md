@@ -166,7 +166,7 @@ Evaluate your trained models:
 * For ARC-AGI, follow these additional steps:
 
 ```bash
-OMP_NUM_THREADS=8 torchrun --nproc-per-node 8 evaluate.py checkpoint=<CHECKPOINT_PATH>
+OMP_NUM_THREADS=8 torchrun --nproc-per-node 1 evaluate.py checkpoint=<CHECKPOINT_PATH>
 ```
 
 * Then use the provided `arc_eval.ipynb` notebook to finalize and inspect your results.

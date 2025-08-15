@@ -1,15 +1,11 @@
-from models.layers import (
-    CastedLinear,
-    CosSin,
-    apply_rotary_pos_emb,
-)
-
 import math
+from typing import Tuple, Optional
 
 import torch
 from torch import nn
 import torch.nn.functional as F
 
+# Import the current device detection
 def get_best_device(verbose=True):
     """
     Automatically selects the best available device:
@@ -30,8 +26,72 @@ def get_best_device(verbose=True):
 
     return device
 
-current_device = get_best_device(verbose=True)
+current_device = get_best_device(verbose=False)
 
+def trunc_normal_init(tensor: torch.Tensor, std: float = 1.0, lower: float = -2.0, upper: float = 2.0):
+    # NOTE: PyTorch nn.init.trunc_normal is not mathematically correct, the std dev is not actually the std dev of initialized tensor
+    # This function is a PyTorch version of jax truncated normal init (default init method in flax)
+    # https://github.com/jax-ml/jax/blob/main/jax/_src/random.py#L807-L848
+    # https://github.com/jax-ml/jax/blob/main/jax/_src/nn/initializers.py#L162-L199
+
+    with torch.no_grad():
+        if std == 0:
+            tensor.zero_()
+        else:
+            sqrt2 = math.sqrt(2)
+            a = math.erf(lower / sqrt2)
+            b = math.erf(upper / sqrt2)
+            z = (b - a) / 2
+
+            c = (2 * math.pi) ** -0.5
+            pdf_u = c * math.exp(-0.5 * upper ** 2)
+            pdf_l = c * math.exp(-0.5 * lower ** 2)
+            comp_std = std / math.sqrt(1 - (upper * pdf_u - lower * pdf_l) / z - ((pdf_u - pdf_l) / z) ** 2)
+
+            tensor.uniform_(a, b)
+            tensor.erfinv_()
+            tensor.mul_(sqrt2 * comp_std)
+            tensor.clamp_(lower * comp_std, upper * comp_std)
+
+    return tensor
+
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+CosSin = Tuple[torch.Tensor, torch.Tensor]
+
+def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
+    # q, k: [bs, seq_len, num_heads, head_dim]
+    # cos, sin: [seq_len, head_dim]
+    orig_dtype = q.dtype
+    q = q.to(cos.dtype)
+    k = k.to(cos.dtype)
+
+    q_embed = (q * cos.unsqueeze(-2)) + (rotate_half(q) * sin.unsqueeze(-2))
+    k_embed = (k * cos.unsqueeze(-2)) + (rotate_half(k) * sin.unsqueeze(-2))
+
+    return q_embed.to(orig_dtype), k_embed.to(orig_dtype)
+
+class CastedLinear(nn.Module):
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 bias: bool):
+        super().__init__()
+        # Truncated LeCun normal init
+        self.weight = nn.Parameter(
+            trunc_normal_init(torch.empty((out_features, in_features)), std=1.0 / (in_features ** 0.5))
+        )
+        self.bias = None
+        if bias:
+            # Zero init bias
+            self.bias = nn.Parameter(torch.zeros((out_features, )))
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return F.linear(input, self.weight.to(input.dtype), bias=self.bias.to(input.dtype) if self.bias is not None else None)
 
 def gaussian_orthogonal_random_matrix(nb_rows: int, nb_columns: int, scaling: float = 0, device=None, dtype=None):
     """Create a random matrix with orthogonal rows/columns and Gaussian entries."""
@@ -248,10 +308,10 @@ class PerformerLinearAttention(nn.Module):
 
         # Apply random feature transformation
         query_prime = relu_kernel_transformation(
-            query, self.projection_matrix, is_query=True, normalize_data=self.normalize_data # type: ignore
+            query, self.projection_matrix, is_query=True, normalize_data=self.normalize_data
         )
         key_prime = relu_kernel_transformation(
-            key, self.projection_matrix, is_query=False, normalize_data=self.normalize_data # type: ignore
+            key, self.projection_matrix, is_query=False, normalize_data=self.normalize_data
         )
 
         # Performer linear attention
@@ -266,9 +326,38 @@ class PerformerLinearAttention(nn.Module):
 
 
 
-
-
-
-
-
-
+# Example usage and comparison
+if __name__ == "__main__":
+    # Test the implementation
+    batch_size = 2
+    seq_len = 128
+    hidden_size = 512
+    head_dim = 64
+    num_heads = 8
+    num_key_value_heads = 8
+    
+    # Create dummy input
+    hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+    cos_sin = None  # Can add RoPE embeddings here if needed
+    
+    # Initialize Performer attention
+    performer_attn = PerformerLinearAttention(
+        hidden_size=hidden_size,
+        head_dim=head_dim, 
+        num_heads=num_heads,
+        num_key_value_heads=num_key_value_heads,
+        causal=False,
+        nb_features=head_dim  # Using same number of features as head_dim
+    )
+    
+    # Move to appropriate device
+    device = current_device
+    performer_attn = performer_attn.to(device)
+    hidden_states = hidden_states.to(device)
+    
+    # Forward pass
+    with torch.no_grad():
+        output = performer_attn(cos_sin, hidden_states)
+        print(f"Output shape: {output.shape}")
+        print(f"Output mean: {output.mean():.4f}, std: {output.std():.4f}")
+        print(f"Device: {output.device}")

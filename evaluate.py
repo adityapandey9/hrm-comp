@@ -1,6 +1,7 @@
 from typing import List
 import yaml
 import os
+import platform
 
 import torch
 import torch.distributed as dist
@@ -21,16 +22,28 @@ def launch():
     
     RANK = 0
     WORLD_SIZE = 1
-    # Initialize distributed training if in distributed environment (e.g. torchrun)
-    if "LOCAL_RANK" in os.environ:
-        # Initialize distributed, default device and dtype
-        dist.init_process_group(backend="nccl")
+    
+    # Only initialize distributed if we actually have multiple processes
+    if "LOCAL_RANK" in os.environ and int(os.environ.get("WORLD_SIZE", "1")) > 1:
+        # Choose appropriate backend based on platform and available hardware
+        if platform.system() == "Darwin":  # macOS
+            backend = "gloo"
+        elif torch.cuda.is_available():
+            backend = "nccl"
+        else:
+            backend = "gloo"
+            
+        # Initialize distributed
+        dist.init_process_group(backend=backend)
 
         RANK = dist.get_rank()
         WORLD_SIZE = dist.get_world_size()
 
+        # Set device for CUDA
         if torch.cuda.is_available():
             torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+    else:
+        print("Running in single-process mode (no distributed training)")
 
     with open(os.path.join(os.path.dirname(eval_cfg.checkpoint), "all_config.yaml"), "r") as f:
         config = PretrainConfig(**yaml.safe_load(f))
